@@ -1,4 +1,15 @@
-const { ApolloServer, gql } = require("apollo-server");
+const { ApolloServer } = require('@apollo/server')
+const { expressMiddleware } = require('@apollo/server/express4')
+const { json } = require('body-parser')
+const cors = require('cors')
+const express = require('express')
+const { makeExecutableSchema } = require('@graphql-tools/schema')
+const { createServer } = require('http')
+const { WebSocketServer } = require('ws')
+const { useServer } = require('graphql-ws/lib/use/ws')
+const { ApolloServerPluginDrainHttpServer } = require('@apollo/server/plugin/drainHttpServer');
+
+const app = express()
 
 // Create movies array
 const movies = [
@@ -8,42 +19,85 @@ const movies = [
   },
 ];
 
-// Initialize type definitions
-const typeDefs = gql`
-  type Movie {
-    movieTitle: String!
-    dateOfRelease: String!
-  }
+const main = async () => {
+  // Initialize type definitions
+  const typeDefs = `#graphql
+    type Movie {
+      movieTitle: String!
+      dateOfRelease: String!
+    }
 
-  type Query {
-    queryMovies: [Movie]!
-  }
+    type Query {
+      queryMovies: [Movie]!
+    }
 
-  type Mutation {
-    addMovie(movieTitle: String!, dateOfRelease: String!): Movie!
-  }
-`;
+    type Mutation {
+      addMovie(movieTitle: String!, dateOfRelease: String!): Movie!
+    }
+  `;
 
-// Create resolver functions
-const resolvers = {
-  Query: {
-    queryMovies: () => movies,
-  },
-
-  Mutation: {
-    addMovie: (parent, args) => {
-      movies.push(args);
-      return args;
+  // Create resolver functions
+  const resolvers = {
+    Query: {
+      queryMovies: () => movies,
     },
-  },
+
+    Mutation: {
+      addMovie: (parent, args) => {
+        movies.push(args);
+        return args;
+      },
+    },
+  };
+
+  const schema = makeExecutableSchema({ typeDefs, resolvers });
+  
+  const httpServer = createServer(app);
+
+  // Creating the WebSocket server
+  const wsServer = new WebSocketServer({
+    // This is the `httpServer` we created in a previous step.
+    server: httpServer,
+    path: '/',
+  });
+
+  // Save the returned server's info so we can shutdown this server later
+  const serverCleanup = useServer({ schema }, wsServer);
+
+  // Initialize GraphQL server
+  const server = new ApolloServer({
+    schema,
+    // —--------------(ADD HERE)-----------------
+    plugins: [
+      // Proper shutdown for the HTTP server.
+      ApolloServerPluginDrainHttpServer({ httpServer }),
+  
+      // Proper shutdown for the WebSocket server.
+      {
+        async serverWillStart() {
+          return {
+            async drainServer() {
+              await serverCleanup.dispose();
+            },
+          };
+        },
+      },
+    ]
+  });
+
+  await server.start();
+
+  app.use(
+    '/',
+    cors(),
+    json(),
+    expressMiddleware(server)
+  )
+
+  const PORT = process.env.PORT || 8080
+  httpServer.listen(PORT, ()=>{
+    console.log(`GraphQL server running at ${PORT}`)
+  })
 };
 
-// Initialize GraphQL server
-const server = new ApolloServer({
-  typeDefs,
-  resolvers,
-});
-
-server
-  .listen({ port: 8080 })
-  .then(({ url }) => console.log(`GraphQL server running at ${url}`));
+main();
