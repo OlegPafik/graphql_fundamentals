@@ -8,7 +8,9 @@ const { createServer } = require('http')
 const { WebSocketServer } = require('ws')
 const { useServer } = require('graphql-ws/lib/use/ws')
 const { ApolloServerPluginDrainHttpServer } = require('@apollo/server/plugin/drainHttpServer');
+const {PubSub} = require('graphql-subscriptions')
 
+const pubsub = new PubSub();
 const app = express()
 
 // Create movies array
@@ -34,6 +36,10 @@ const main = async () => {
     type Mutation {
       addMovie(movieTitle: String!, dateOfRelease: String!): Movie!
     }
+
+    type Subscription { 
+      newMovie: [Movie!]!
+    }
   `;
 
   // Create resolver functions
@@ -45,9 +51,16 @@ const main = async () => {
     Mutation: {
       addMovie: (parent, args) => {
         movies.push(args);
+        pubsub.publish('MOVIE_ADDED', { newMovie: movies })
         return args;
       },
     },
+
+    Subscription: {
+      newMovie: {
+       subscribe: () => pubsub.asyncIterator(["MOVIE_ADDED"]),
+      },
+     },   
   };
 
   const schema = makeExecutableSchema({ typeDefs, resolvers });
